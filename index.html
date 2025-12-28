@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Neon Neon Lander</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap');
+        
+        body {
+            background-color: #0a0a0c;
+            color: #00f2ff;
+            font-family: 'Orbitron', sans-serif;
+            overflow: hidden;
+            margin: 0;
+            touch-action: none;
+        }
+
+        canvas {
+            display: block;
+            image-rendering: pixelated;
+        }
+
+        .neon-text {
+            text-shadow: 0 0 10px #00f2ff, 0 0 20px #00f2ff;
+        }
+
+        .ui-panel {
+            background: rgba(10, 10, 12, 0.8);
+            border: 1px solid #00f2ff;
+            box-shadow: 0 0 15px rgba(0, 242, 255, 0.3);
+        }
+
+        .btn-ctrl {
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+    </style>
+</head>
+<body class="flex flex-col items-center justify-center h-screen">
+
+    <!-- UI Overlay -->
+    <div id="ui" class="fixed top-4 left-4 right-4 flex justify-between items-start pointer-events-none z-10">
+        <div class="ui-panel p-3 rounded-lg">
+            <div class="text-xs opacity-70">ALTITUDE</div>
+            <div id="alt-display" class="text-xl font-bold">0m</div>
+            <div class="mt-2 text-xs opacity-70">FUEL</div>
+            <div class="w-32 h-2 bg-gray-800 rounded-full overflow-hidden border border-cyan-900">
+                <div id="fuel-bar" class="h-full bg-cyan-400" style="width: 100%"></div>
+            </div>
+        </div>
+        
+        <div class="text-center">
+            <div id="score-display" class="text-3xl font-bold neon-text">SCORE: 000</div>
+            <div id="msg-display" class="text-sm mt-2 font-medium animate-pulse">LEVEL 1</div>
+        </div>
+
+        <div class="ui-panel p-3 rounded-lg text-right">
+            <div class="text-xs opacity-70">VELOCITY</div>
+            <div id="vel-display" class="text-xl font-bold">0.0</div>
+            <div class="text-[10px] mt-1 text-red-400" id="vel-warn"></div>
+        </div>
+    </div>
+
+    <!-- Game Canvas -->
+    <canvas id="gameCanvas" class="w-full h-full"></canvas>
+
+    <!-- Mobile Controls -->
+    <div id="mobile-controls" class="fixed bottom-8 left-0 right-0 flex justify-around px-8 pointer-events-none md:hidden">
+        <div class="flex gap-4">
+            <button id="btn-left" class="btn-ctrl pointer-events-auto w-16 h-16 bg-cyan-900/40 border-2 border-cyan-400 rounded-full flex items-center justify-center active:bg-cyan-400/40">
+                <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+            </button>
+            <button id="btn-right" class="btn-ctrl pointer-events-auto w-16 h-16 bg-cyan-900/40 border-2 border-cyan-400 rounded-full flex items-center justify-center active:bg-cyan-400/40">
+                <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+            </button>
+        </div>
+        <button id="btn-thrust" class="btn-ctrl pointer-events-auto w-20 h-20 bg-pink-900/40 border-2 border-pink-500 rounded-full flex items-center justify-center active:bg-pink-500/40">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+        </button>
+    </div>
+
+    <!-- Start/GameOver Modal -->
+    <div id="modal" class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+        <div class="ui-panel p-8 rounded-2xl max-w-md w-full text-center">
+            <h1 id="modal-title" class="text-4xl font-bold mb-4 neon-text">NEON LANDER</h1>
+            <p id="modal-text" class="mb-6 text-cyan-200">Navigate the neon caverns. Land softly on the glowing platforms. Watch your fuel!</p>
+            <div class="space-y-4 mb-8 text-sm opacity-80">
+                <p>⌨️ ARROWS or WASD to move</p>
+                <p>📱 Touch buttons for mobile</p>
+                <p>⚠️ Landing speed must be < 1.5</p>
+            </div>
+            <button id="start-btn" class="w-full py-4 bg-cyan-500 text-black font-bold rounded-lg hover:bg-cyan-400 transition-colors shadow-[0_0_20px_rgba(6,182,212,0.5)]">
+                ENGAGE SYSTEMS
+            </button>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const ui = {
+            alt: document.getElementById('alt-display'),
+            fuel: document.getElementById('fuel-bar'),
+            score: document.getElementById('score-display'),
+            vel: document.getElementById('vel-display'),
+            velWarn: document.getElementById('vel-warn'),
+            msg: document.getElementById('msg-display'),
+            modal: document.getElementById('modal'),
+            modalTitle: document.getElementById('modal-title'),
+            modalText: document.getElementById('modal-text'),
+            startBtn: document.getElementById('start-btn')
+        };
+
+        // Game Constants
+        const GRAVITY = 0.012;
+        const THRUST = 0.035;
+        const ROTATION_SPEED = 0.04;
+        const FRICTION = 0.99;
+        const SAFE_LANDING_VEL = 1.5;
+
+        let gameState = 'START';
+        let score = 0;
+        let level = 1;
+        
+        let ship = {
+            x: 0,
+            y: 0,
+            vx: 0,
+            vy: 0,
+            angle: -Math.PI / 2,
+            fuel: 100,
+            width: 20,
+            height: 25,
+            isThrusting: false,
+            particles: []
+        };
+
+        let terrain = [];
+        let platforms = [];
+        let cameraX = 0;
+
+        // Input handling
+        const keys = {};
+        window.addEventListener('keydown', e => keys[e.code] = true);
+        window.addEventListener('keyup', e => keys[e.code] = false);
+
+        // Mobile touch handling
+        const mobileControls = {
+            left: false,
+            right: false,
+            thrust: false
+        };
+
+        const setupMobileBtn = (id, key) => {
+            const btn = document.getElementById(id);
+            btn.addEventListener('touchstart', (e) => { e.preventDefault(); mobileControls[key] = true; });
+            btn.addEventListener('touchend', (e) => { e.preventDefault(); mobileControls[key] = false; });
+            btn.addEventListener('mousedown', () => mobileControls[key] = true);
+            btn.addEventListener('mouseup', () => mobileControls[key] = false);
+        };
+
+        setupMobileBtn('btn-left', 'left');
+        setupMobileBtn('btn-right', 'right');
+        setupMobileBtn('btn-thrust', 'thrust');
+
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            if (gameState === 'START') resetLevel();
+        }
+
+        function generateLevel() {
+            terrain = [];
+            platforms = [];
+            const segments = 100;
+            const segmentWidth = 150;
+            let currentY = canvas.height * 0.7;
+
+            for (let i = 0; i < segments; i++) {
+                const x = i * segmentWidth;
+                
+                // Randomly create platforms
+                if (i > 2 && i % 8 === 0) {
+                    const pWidth = Math.max(40, 100 - (level * 5));
+                    platforms.push({
+                        x: x,
+                        y: currentY,
+                        width: pWidth,
+                        landed: false
+                    });
+                    terrain.push({x, y: currentY});
+                    terrain.push({x: x + pWidth, y: currentY});
+                    i += Math.floor(pWidth / segmentWidth);
+                } else {
+                    currentY += (Math.random() - 0.5) * 200;
+                    currentY = Math.min(Math.max(currentY, canvas.height * 0.4), canvas.height - 50);
+                    terrain.push({x, y: currentY});
+                }
+            }
+        }
+
+        function resetLevel() {
+            ship.x = 100;
+            ship.y = 100;
+            ship.vx = 2;
+            ship.vy = 0;
+            ship.angle = 0;
+            ship.fuel = 100;
+            cameraX = 0;
+            generateLevel();
+        }
+
+        function createExplosion(x, y, color) {
+            for (let i = 0; i < 20; i++) {
+                ship.particles.push({
+                    x, y,
+                    vx: (Math.random() - 0.5) * 10,
+                    vy: (Math.random() - 0.5) * 10,
+                    life: 1,
+                    color: color
+                });
+            }
+        }
+
+        function update() {
+            if (gameState !== 'PLAYING') return;
+
+            // Movement
+            if ((keys['ArrowLeft'] || keys['KeyA'] || mobileControls.left) && ship.fuel > 0) {
+                ship.angle -= ROTATION_SPEED;
+            }
+            if ((keys['ArrowRight'] || keys['KeyD'] || mobileControls.right) && ship.fuel > 0) {
+                ship.angle += ROTATION_SPEED;
+            }
+
+            ship.isThrusting = (keys['ArrowUp'] || keys['KeyW'] || keys['Space'] || mobileControls.thrust) && ship.fuel > 0;
+            
+            if (ship.isThrusting) {
+                ship.vx += Math.cos(ship.angle) * THRUST;
+                ship.vy += Math.sin(ship.angle) * THRUST;
+                ship.fuel -= 0.2;
+                
+                // Thrust particles
+                ship.particles.push({
+                    x: ship.x - Math.cos(ship.angle) * 10,
+                    y: ship.y - Math.sin(ship.angle) * 10,
+                    vx: -Math.cos(ship.angle) * 2 + (Math.random() - 0.5),
+                    vy: -Math.sin(ship.angle) * 2 + (Math.random() - 0.5),
+                    life: 1,
+                    color: '#f472b6'
+                });
+            }
+
+            ship.vy += GRAVITY;
+            ship.vx *= FRICTION;
+            ship.vy *= FRICTION;
+            
+            ship.x += ship.vx;
+            ship.y += ship.vy;
+
+            // Particle Physics
+            ship.particles.forEach((p, i) => {
+                p.x += p.vx;
+                p.y += p.vy;
+                p.life -= 0.02;
+                if (p.life <= 0) ship.particles.splice(i, 1);
+            });
+
+            // Camera follow
+            const targetCamX = ship.x - canvas.width / 3;
+            cameraX += (targetCamX - cameraX) * 0.1;
+
+            // Collision Check
+            checkCollisions();
+
+            // Update UI
+            ui.alt.innerText = Math.max(0, Math.floor((canvas.height - ship.y) / 10)) + 'm';
+            ui.fuel.style.width = ship.fuel + '%';
+            const totalVel = Math.sqrt(ship.vx * ship.vx + ship.vy * ship.vy);
+            ui.vel.innerText = totalVel.toFixed(1);
+            ui.velWarn.innerText = totalVel > SAFE_LANDING_VEL ? 'TOO FAST' : '';
+            ui.vel.style.color = totalVel > SAFE_LANDING_VEL ? '#f87171' : '#22d3ee';
+        }
+
+        function checkCollisions() {
+            // Ground collision
+            for (let i = 0; i < terrain.length - 1; i++) {
+                const p1 = terrain[i];
+                const p2 = terrain[i+1];
+                
+                if (ship.x > p1.x && ship.x < p2.x) {
+                    // Linear interpolation to find ground height at ship.x
+                    const t = (ship.x - p1.x) / (p2.x - p1.x);
+                    const groundY = p1.y + t * (p2.y - p1.y);
+
+                    if (ship.y + ship.height/2 > groundY) {
+                        // Check if on a platform
+                        const platform = platforms.find(p => ship.x > p.x && ship.x < p.x + p.width && p1.y === p2.y && p1.y === p.y);
+                        const totalVel = Math.sqrt(ship.vx * ship.vx + ship.vy * ship.vy);
+
+                        if (platform && totalVel < SAFE_LANDING_VEL && Math.abs(ship.angle + Math.PI/2) < 0.3) {
+                            landSuccess(platform);
+                        } else {
+                            gameOver();
+                        }
+                    }
+                }
+            }
+
+            if (ship.y < 0 || ship.y > canvas.height + 100) gameOver();
+        }
+
+        function landSuccess(platform) {
+            if (platform.landed) return;
+            platform.landed = true;
+            score += 100 + Math.floor(ship.fuel);
+            ui.score.innerText = `SCORE: ${score.toString().padStart(3, '0')}`;
+            level++;
+            ui.msg.innerText = `LEVEL ${level} INITIATED`;
+            
+            createExplosion(ship.x, ship.y, '#4ade80');
+            
+            gameState = 'TRANSITION';
+            setTimeout(() => {
+                resetLevel();
+                gameState = 'PLAYING';
+            }, 1500);
+        }
+
+        function gameOver() {
+            gameState = 'GAMEOVER';
+            createExplosion(ship.x, ship.y, '#f87171');
+            ui.modalTitle.innerText = "CRITICAL FAILURE";
+            ui.modalTitle.style.color = "#f87171";
+            ui.modalText.innerText = `Lander destroyed. Final Score: ${score}`;
+            ui.startBtn.innerText = "REBOOT SYSTEM";
+            ui.modal.classList.remove('hidden');
+        }
+
+        function draw() {
+            ctx.fillStyle = '#0a0a0c';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.save();
+            ctx.translate(-cameraX, 0);
+
+            // Draw Terrain
+            ctx.beginPath();
+            ctx.moveTo(terrain[0].x, terrain[0].y);
+            for (let i = 1; i < terrain.length; i++) {
+                ctx.lineTo(terrain[i].x, terrain[i].y);
+            }
+            ctx.strokeStyle = '#1e293b';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // Draw Platforms
+            platforms.forEach(p => {
+                ctx.beginPath();
+                ctx.moveTo(p.x, p.y);
+                ctx.lineTo(p.x + p.width, p.y);
+                ctx.lineWidth = 4;
+                ctx.strokeStyle = p.landed ? '#4ade80' : '#00f2ff';
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = p.landed ? '#4ade80' : '#00f2ff';
+                ctx.stroke();
+                ctx.shadowBlur = 0;
+            });
+
+            // Draw Particles
+            ship.particles.forEach(p => {
+                ctx.globalAlpha = p.life;
+                ctx.fillStyle = p.color;
+                ctx.fillRect(p.x, p.y, 3, 3);
+            });
+            ctx.globalAlpha = 1;
+
+            // Draw Ship
+            if (gameState !== 'GAMEOVER') {
+                ctx.save();
+                ctx.translate(ship.x, ship.y);
+                ctx.rotate(ship.angle + Math.PI/2);
+                
+                // Ship Body
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(0, -12); // Nose
+                ctx.lineTo(8, 8);   // Right back
+                ctx.lineTo(-8, 8);  // Left back
+                ctx.closePath();
+                ctx.stroke();
+
+                // Thruster fire
+                if (ship.isThrusting) {
+                    ctx.beginPath();
+                    ctx.moveTo(-4, 9);
+                    ctx.lineTo(0, 18 + Math.random() * 5);
+                    ctx.lineTo(4, 9);
+                    ctx.fillStyle = '#f472b6';
+                    ctx.fill();
+                }
+
+                // Legs
+                ctx.beginPath();
+                ctx.moveTo(-8, 8); ctx.lineTo(-12, 12);
+                ctx.moveTo(8, 8); ctx.lineTo(12, 12);
+                ctx.stroke();
+                
+                ctx.restore();
+            }
+
+            ctx.restore();
+
+            requestAnimationFrame(() => {
+                update();
+                draw();
+            });
+        }
+
+        ui.startBtn.onclick = () => {
+            score = 0;
+            level = 1;
+            ui.score.innerText = 'SCORE: 000';
+            ui.msg.innerText = 'LEVEL 1';
+            ui.modalTitle.innerText = "NEON LANDER";
+            ui.modalTitle.style.color = "#00f2ff";
+            resetLevel();
+            gameState = 'PLAYING';
+            ui.modal.classList.add('hidden');
+        };
+
+        window.onresize = resize;
+        resize();
+        draw();
+    </script>
+</body>
+</html>
